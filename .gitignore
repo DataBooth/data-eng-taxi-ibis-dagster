@@ -1,5 +1,7 @@
 # Extras
 
+.DS_Store
+tmp/
 .tmp_dagster*
 .vscode/
 data/

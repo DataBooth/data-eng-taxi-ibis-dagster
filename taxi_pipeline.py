@@ -1,11 +1,10 @@
 import time
 from pathlib import Path
+from loguru import logger
 
-import duckdb
 import ibis
 from dagster import Definitions, asset
 from dagster_duckdb import DuckDBResource
-from loguru import logger
 
 # Paths
 DB_PATH = Path("data/nyc_taxi.duckdb")
@@ -13,14 +12,13 @@ PARQUET_DIR = Path("../data-eng-taxi/seeds")
 RAW_PARQUET_PATTERN = str(PARQUET_DIR / "*.parquet")
 EXPORT_PARQUET_PATH = Path("data/nyc_taxi_export.parquet")
 
-# The following line creates a Dagster resource for managing DuckDB database connections.
-duckdb_resource = DuckDBResource(database=str(DB_PATH))
-
+# This line creates a Dagster resource for managing DuckDB database connections.
 # Using DuckDBResource ensures that:
 # - Each Dagster asset gets a properly managed, isolated connection to the DuckDB database file.
 # - Connections are automatically closed after use, preventing file lock conflicts.
 # - You avoid concurrency issues that arise when multiple assets/processes access the same DuckDB file.
 # - Dagster can inject this resource into any asset that declares a 'duckdb' argument.
+duckdb_resource = DuckDBResource(database=str(DB_PATH))
 
 
 @asset
@@ -96,7 +94,7 @@ def get_ibis_table_from_table(con, table_name):
     )
 
 
-@asset(deps=["ingest_taxi_parquet_to_duckdb"])
+@asset(deps=["ingest_taxi_parquet_to_duckdb"], compute_kind="python")
 def duckdb_asset(duckdb: DuckDBResource):
     """
     Executes an Ibis query on the persistent DuckDB table and returns the result.
@@ -112,15 +110,19 @@ def duckdb_asset(duckdb: DuckDBResource):
         pandas.DataFrame: The aggregated result of the Ibis query.
     """
     start = time.perf_counter()
-    with duckdb.get_connection() as con:
-        ibis_con = ibis.duckdb.connect(con=con)
+    try:
+        # Connect Ibis directly to the database file path
+        ibis_con = ibis.duckdb.connect(str(DB_PATH))
         expr = get_ibis_table_from_table(ibis_con, "nyc_taxi")
         result = expr.execute()
-    logger.info(f"DuckDB asset took {time.perf_counter() - start:.2f} seconds")
-    return result
+        logger.info(f"DuckDB asset took {time.perf_counter() - start:.2f} seconds")
+        return result
+    except Exception as e:
+        logger.error(f"DuckDB asset failed: {e}")
+        raise
 
 
-@asset(deps=["export_nyc_taxi_to_parquet"])
+@asset(deps=["export_nyc_taxi_to_parquet"], compute_kind="pyspark")
 def spark_asset():
     """
     Executes an Ibis query on the exported Parquet file using the PySpark backend.
@@ -134,16 +136,20 @@ def spark_asset():
         pandas.DataFrame: The aggregated result of the Ibis query on Spark.
     """
     start = time.perf_counter()
-    con = ibis.pyspark.connect()
-    t = con.read_parquet(str(EXPORT_PARQUET_PATH))
-    expr = (
-        t.filter(t.fare_amount > 50)
-        .group_by(t.passenger_count)
-        .aggregate(avg_fare=t.fare_amount.mean())
-    )
-    result = expr.execute()
-    logger.info(f"Spark asset took {time.perf_counter() - start:.2f} seconds")
-    return result
+    try:
+        con = ibis.pyspark.connect()
+        t = con.read_parquet(str(EXPORT_PARQUET_PATH))
+        expr = (
+            t.filter(t.fare_amount > 50)
+            .group_by(t.passenger_count)
+            .aggregate(avg_fare=t.fare_amount.mean())
+        )
+        result = expr.execute()
+        logger.info(f"Spark asset took {time.perf_counter() - start:.2f} seconds")
+        return result
+    except Exception as e:
+        logger.error(f"Spark asset failed: {e}")
+        raise
 
 
 defs = Definitions(

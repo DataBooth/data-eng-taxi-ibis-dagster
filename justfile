@@ -5,7 +5,7 @@ default:
 
 # Run dagster job
 dagrun:
-    dagster dev -f taxi_pipeline.py
+    dagster dev -f taxi_pipeline_native.py
 
 # Start Dagster webserver (Dagit UI)
 dagit:
@@ -34,3 +34,7 @@ asset-graph:
 # Show Dagster version
 dag-version:
     dagster --version
+
+
+
+# dagster project from-example --name my-tmp-dagster-project --example assets_pandas_pyspark
